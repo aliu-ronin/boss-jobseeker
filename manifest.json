@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Boss 直聘求职助手",
+  "version": "2.0.0",
+  "description": "AI 甄别 Boss 直聘消息，自动回复+发简历（无需本地服务）",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": [
+    "https://www.zhipin.com/*",
+    "https://api.z.ai/*",
+    "https://api.minimaxi.com/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://api.anthropic.com/*",
+    "https://api.openai.com/*",
+    "https://open.bigmodel.cn/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.zhipin.com/web/geek/chat*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Boss 求职助手"
+  },
+  "icons": {}
+}

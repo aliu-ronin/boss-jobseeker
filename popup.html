@@ -1,0 +1,222 @@
+<!-- Boss直聘求职助手 - Popup UI -->
+<!-- Copyright (C) 2026 刘戈 <aliu.ronin@gmail.com> -->
+<!-- License: GPL-3.0 — see LICENSE file -->
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { width: 340px; padding: 12px; font-family: -apple-system, sans-serif; font-size: 13px; }
+    h3 { margin: 0 0 8px; font-size: 15px; }
+    .status { padding: 6px 10px; border-radius: 6px; margin: 6px 0; }
+    .online { background: #e8f5e9; color: #2e7d32; }
+    .offline { background: #ffebee; color: #c62828; }
+    .paused { background: #fff3e0; color: #e65100; }
+    .stats { color: #666; line-height: 1.8; }
+    .progress-wrap { margin-top: 6px; padding: 6px 8px; background: #f8f9fa; border-radius: 6px; }
+    .progress-bar { background: #e0e0e0; height: 6px; border-radius: 3px; overflow: hidden; }
+    .progress-fill { background: #1677ff; height: 100%; border-radius: 3px; transition: width 0.5s ease; min-width: 0; }
+    .progress-bar.waiting .progress-fill { width: 100% !important; background: linear-gradient(90deg, #1677ff 25%, #69b1ff 50%, #1677ff 75%); background-size: 200% 100%; animation: slide 1.5s linear infinite; }
+    @keyframes slide { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+    .progress-info { font-size: 11px; color: #666; margin-top: 4px; line-height: 1.5; }
+    button { width: 100%; padding: 8px; margin-top: 6px; border: none; border-radius: 6px;
+             background: #1677ff; color: #fff; cursor: pointer; font-size: 13px; }
+    button:hover { background: #0958d9; }
+    button.danger { background: #ff4d4f; }
+    button.danger:hover { background: #cf1322; }
+    button.secondary { background: #f5f5f5; color: #333; }
+    button.secondary:hover { background: #e8e8e8; }
+
+    .config-panel { display: none; margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px; }
+    .config-panel.show { display: block; }
+    .section { margin-bottom: 12px; }
+    .section h4 { margin: 0 0 6px; font-size: 12px; color: #1677ff; border-bottom: 1px solid #eef; padding-bottom: 4px; }
+    .field { margin-bottom: 6px; }
+    .field label { display: block; font-size: 11px; color: #888; margin-bottom: 2px; }
+    .field input, .field textarea, .field select {
+      width: 100%; box-sizing: border-box; padding: 5px 8px; border: 1px solid #ddd;
+      border-radius: 4px; font-size: 12px; font-family: inherit; }
+    .field input:focus, .field textarea:focus, .field select:focus { border-color: #1677ff; outline: none; }
+    .field textarea { resize: vertical; min-height: 44px; }
+    .field-row { display: flex; gap: 8px; }
+    .field-row .field { flex: 1; }
+    .field .hint { font-size: 10px; color: #aaa; margin-top: 1px; }
+    .save-msg { font-size: 11px; color: #2e7d32; margin-top: 4px; display: none; text-align: center; }
+    .api-key-wrap { position: relative; }
+    .api-key-wrap input { padding-right: 36px; }
+    .api-key-wrap .toggle-eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+      cursor: pointer; font-size: 14px; color: #aaa; user-select: none; }
+  </style>
+</head>
+<body>
+  <h3>Boss 求职助手</h3>
+  <div id="status" class="status offline">检查中...</div>
+  <div id="progressWrap" class="progress-wrap" style="display:none;">
+    <div class="progress-bar"><div id="progressFill" class="progress-fill" style="width:0%"></div></div>
+    <div id="progressInfo" class="progress-info"></div>
+  </div>
+  <div id="stats" class="stats"></div>
+  <button id="toggleBtn">开始扫描</button>
+  <button id="scanNowBtn" class="secondary">立即扫描一轮</button>
+  <button id="debugBtn" class="secondary">调试模式：关</button>
+  <button id="statusBtn" class="secondary">查看统计</button>
+  <button id="clearCacheBtn" class="secondary">清除缓存</button>
+  <button id="configBtn" class="secondary">配置</button>
+
+  <div id="configPanel" class="config-panel">
+
+    <div class="section">
+      <h4>身份信息</h4>
+      <div class="field-row">
+        <div class="field">
+          <label>姓名</label>
+          <input type="text" id="cfgName">
+        </div>
+        <div class="field">
+          <label>现任岗位</label>
+          <input type="text" id="cfgRole">
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>现任公司</label>
+          <input type="text" id="cfgCompany">
+        </div>
+        <div class="field">
+          <label>经验年限</label>
+          <input type="number" id="cfgYears" min="1" max="40">
+        </div>
+      </div>
+      <div class="field">
+        <label>技术栈（逗号分隔）</label>
+        <input type="text" id="cfgTechStack" placeholder="Java, Python, Spring Boot, ...">
+      </div>
+    </div>
+
+    <div class="section">
+      <h4>筛选条件</h4>
+      <div class="field-row">
+        <div class="field">
+          <label>薪资基准线 (年薪K)</label>
+          <input type="number" id="cfgBaseline" min="100" step="50">
+          <div class="hint">= 50分，高于加分低于扣分</div>
+        </div>
+        <div class="field">
+          <label>自动投递阈值 (分)</label>
+          <input type="number" id="cfgThreshold" min="0" max="200">
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>目标城市（逗号分隔）</label>
+          <input type="text" id="cfgCities" placeholder="深圳, 广州, 远程">
+        </div>
+        <div class="field">
+          <label>每轮最大处理数</label>
+          <input type="number" id="cfgMaxScan" min="1" max="50">
+        </div>
+      </div>
+      <div class="field">
+        <label>黑名单行业（逗号分隔）</label>
+        <input type="text" id="cfgBlacklist" placeholder="博彩, P2P, 资金盘, ...">
+      </div>
+    </div>
+
+    <div class="section">
+      <h4>自动回复</h4>
+      <div class="field">
+        <label>首次招呼语（占位符: {name} {role} {company} {score} {threshold}）</label>
+        <textarea id="cfgGreeting" rows="3"></textarea>
+      </div>
+      <div class="field">
+        <label>二次消息礼貌回复</label>
+        <textarea id="cfgFollowup" rows="2"></textarea>
+      </div>
+    </div>
+
+    <div class="section">
+      <h4>AI 模型</h4>
+      <div class="field-row">
+        <div class="field">
+          <label>提供商</label>
+          <select id="cfgProvider"></select>
+        </div>
+        <div class="field">
+          <label>模型</label>
+          <select id="cfgModel"></select>
+        </div>
+      </div>
+      <div id="providerNote" class="hint" style="margin-bottom:6px;color:#e65100;"></div>
+      <div class="field">
+        <label>API URL</label>
+        <input type="text" id="cfgApiUrl" style="font-size:11px;">
+      </div>
+      <div class="field">
+        <label>API Key</label>
+        <div class="api-key-wrap">
+          <input type="password" id="cfgApiKey">
+          <span class="toggle-eye" id="toggleKeyEye">&#128065;</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h4>OpenClaw 通知</h4>
+      <div class="field-row">
+        <div class="field">
+          <label>启用通知</label>
+          <select id="cfgOcEnabled">
+            <option value="0">关闭</option>
+            <option value="1">开启</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Gateway 地址</label>
+          <input type="text" id="cfgOcUrl" placeholder="http://127.0.0.1:18789" style="font-size:11px;">
+        </div>
+      </div>
+      <div class="field">
+        <label>Gateway Token</label>
+        <div class="api-key-wrap">
+          <input type="password" id="cfgOcToken">
+          <span class="toggle-eye" id="toggleOcEye">&#128065;</span>
+        </div>
+      </div>
+      <div class="field">
+        <label>通知场景</label>
+        <div style="display:flex;gap:12px;margin-top:2px;">
+          <label style="font-size:12px;display:flex;align-items:center;gap:3px;">
+            <input type="checkbox" id="cfgOcReply"> 自动投递
+          </label>
+          <label style="font-size:12px;display:flex;align-items:center;gap:3px;">
+            <input type="checkbox" id="cfgOcInterview"> 面试邀请
+          </label>
+          <label style="font-size:12px;display:flex;align-items:center;gap:3px;">
+            <input type="checkbox" id="cfgOcSummary"> 轮次摘要
+          </label>
+        </div>
+      </div>
+      <div class="hint">通过本地 OpenClaw Gateway 推送到 WhatsApp / 飞书</div>
+    </div>
+
+    <button id="saveConfigBtn">保存配置</button>
+    <div id="saveMsg" class="save-msg">配置已保存并生效</div>
+  </div>
+
+  <button id="donateBtn" class="secondary" style="margin-top:8px;">关于 / 打赏</button>
+  <div id="donatePanel" style="display:none; margin-top:8px; border-top:1px solid #eee; padding-top:10px;">
+    <div style="text-align:center;">
+      <p style="margin:0 0 8px; font-size:12px; color:#666;">如果觉得好用，请作者喝杯咖啡</p>
+      <img id="donateQr" src="alipay-qr.jpg" alt="支付宝付款码"
+           style="max-width:200px; border-radius:8px; border:1px solid #eee;">
+      <p style="margin:6px 0 0; font-size:11px; color:#999;">支付宝扫码打赏</p>
+    </div>
+    <div style="margin-top:10px; padding-top:8px; border-top:1px solid #f0f0f0; font-size:11px; color:#999; line-height:1.8;">
+      <div>作者：aliu.ronin@gmail.com</div>
+      <div>协议：GPL v3 - 自由使用，修改需开源</div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

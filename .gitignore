@@ -1,0 +1,27 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Config with secrets (never commit)
+config/
+*.yaml
+*.yml
+
+# Data / logs
+data/
+logs/
+*.log
+*.bak
+
+# Chrome profile data
+chrome-profile/
+
+# Python backend (legacy)
+scripts/
+__pycache__/
+*.pyc
+venv/
