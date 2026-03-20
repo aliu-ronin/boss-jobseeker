@@ -297,6 +297,135 @@ async function llmChat(llmCfg, prompt) {
   return null;
 }
 
+// ── 纯规则评分引擎（无 LLM 降级模式）──
+function parseSalaryK(salaryText) {
+  if (!salaryText || salaryText === "未知" || salaryText === "面议") return null;
+  // "40-60K·14薪" → 年薪 700K
+  const m = salaryText.match(/(\d+)\s*[-~]\s*(\d+)\s*[Kk]/);
+  if (!m) return null;
+  const lo = parseInt(m[1]), hi = parseInt(m[2]);
+  const nMatch = salaryText.match(/(\d+)\s*薪/);
+  const months = nMatch ? parseInt(nMatch[1]) : 12;
+  return (lo + hi) / 2 * months;
+}
+
+function ruleCityScore(city) {
+  if (!city || city === "未知" || city.includes("远程")) return 0;
+  if (city.includes("深圳")) return 0;
+  if (city.includes("香港")) return -40;
+  const gdCities = ["广州", "东莞", "佛山", "珠海", "中山", "惠州", "江门", "肇庆", "汕头", "湛江"];
+  if (gdCities.some(c => city.includes(c))) return -60;
+  return -100; // 广东省以外
+}
+
+const SPAM_KEYWORDS = ["副业", "兼职", "月入", "招商加盟", "退税", "刷单", "理财", "保险代理", "微商", "传销", "个人所得税", "日结", "轻松赚"];
+const BLACKLIST_KEYWORDS = ["博彩", "P2P", "资金盘", "网络赌博", "棋牌", "彩票"];
+const OUTSOURCE_KEYWORDS = ["外包", "外派", "驻场", "人力外包", "人力派遣"];
+const S996_KEYWORDS = ["996", "大小周", "007"];
+const AI_KEYWORDS = ["AI", "人工智能", "大模型", "Agent", "智能体", "LLM", "机器学习", "深度学习", "NLP", "CV", "算法", "AIGC", "GPT", "RAG"];
+const RECRUITER_KEYWORDS = ["猎头", "HR", "人力资源", "招聘顾问", "HRBP", "招聘经理", "人才顾问"];
+const FAMOUS_COMPANIES = ["腾讯", "阿里", "百度", "字节跳动", "华为", "美团", "京东", "网易", "小米", "滴滴", "快手", "拼多多", "蚂蚁", "微软", "谷歌", "Google", "Microsoft", "Amazon", "亚马逊", "苹果", "Apple", "Meta", "字节", "ByteDance", "Tencent", "Alibaba", "Baidu"];
+const PUBLIC_COMPANY_HINTS = ["上市公司", "A股", "港股", "纳斯达克", "NYSE", "IPO"];
+
+function ruleBasedEvaluate(config, jobInfo) {
+  const fi = config.filters || {};
+  const sc = config.scoring || DEFAULT_CONFIG.scoring;
+  const baseline = fi.salary_baseline_k || 500;
+  const acceptOut = fi.accept_outsource || false;
+
+  const allText = [jobInfo.company, jobInfo.position, jobInfo.title, jobInfo.salary, jobInfo.city, jobInfo.message].join(" ");
+  let score = 50; // 默认基准分
+  const details = [];
+
+  // 1. 薪资计分
+  const annualK = parseSalaryK(jobInfo.salary);
+  if (annualK !== null) {
+    if (annualK >= baseline) {
+      score = 50 + (annualK - baseline) / 5;
+    } else {
+      score = 50 - (baseline - annualK) / 10;
+    }
+    details.push(`薪资${annualK}K→${Math.round(score)}分`);
+  } else {
+    details.push("薪资未知→50分");
+  }
+
+  // 2. 地点计分
+  const cityScore = ruleCityScore(jobInfo.city);
+  if (cityScore !== 0) {
+    score += cityScore;
+    details.push(`地点${jobInfo.city}→${cityScore}`);
+  }
+
+  // 3. 垃圾/诈骗
+  if (SPAM_KEYWORDS.some(kw => allText.includes(kw))) {
+    score -= 1000;
+    details.push("垃圾/诈骗-1000");
+  }
+
+  // 4. 黑名单行业
+  const blConfig = fi.blacklist_industries || [];
+  const blAll = [...BLACKLIST_KEYWORDS, ...blConfig];
+  if (blAll.some(kw => allText.includes(kw))) {
+    score -= 1000;
+    details.push("黑名单行业-1000");
+  }
+
+  // 5. 外包/外派
+  if (!acceptOut && OUTSOURCE_KEYWORDS.some(kw => allText.includes(kw))) {
+    score += sc.outsource;
+    details.push(`外包${sc.outsource}`);
+  }
+
+  // 6. 996/大小周
+  if (S996_KEYWORDS.some(kw => allText.includes(kw))) {
+    score += sc.s996;
+    details.push(`996${sc.s996}`);
+  }
+
+  // 7. 信息不足（薪资和岗位都缺失）
+  const noSalary = !jobInfo.salary || jobInfo.salary === "未知" || jobInfo.salary === "面议";
+  const noTitle = !jobInfo.title || jobInfo.title === "未知";
+  if (noSalary && noTitle) {
+    score += sc.info_insufficient;
+    details.push(`信息不足${sc.info_insufficient}`);
+  }
+
+  // 8. AI 方向
+  const titleAndMsg = [jobInfo.title, jobInfo.message, jobInfo.position].join(" ");
+  if (AI_KEYWORDS.some(kw => titleAndMsg.toUpperCase().includes(kw.toUpperCase()))) {
+    score += sc.ai_match;
+    details.push(`AI方向+${sc.ai_match}`);
+  } else {
+    score += sc.ai_nomatch;
+    details.push(`非AI${sc.ai_nomatch}`);
+  }
+
+  // 9. 猎头/HR
+  if (RECRUITER_KEYWORDS.some(kw => (jobInfo.position || "").includes(kw))) {
+    score += sc.recruiter_contact;
+    details.push(`猎头/HR+${sc.recruiter_contact}`);
+  }
+
+  // 10. 知名公司
+  if (FAMOUS_COMPANIES.some(kw => (jobInfo.company || "").includes(kw))) {
+    score += sc.famous_company;
+    details.push(`知名公司+${sc.famous_company}`);
+  }
+
+  // 11. 上市公司
+  if (PUBLIC_COMPANY_HINTS.some(kw => allText.includes(kw))) {
+    score += sc.public_company;
+    details.push(`上市公司+${sc.public_company}`);
+  }
+
+  score = Math.max(0, Math.round(score));
+  const action = score >= (config.actions?.auto_reply_threshold || 70) ? "REPLY" : "IGNORE";
+  const reason = score >= 70 ? details.slice(0, 2).join(";") : details.slice(0, 2).join(";");
+
+  return { score, reason: reason.substring(0, 15), action, detail: `[规则引擎] ${details.join(" | ")}` };
+}
+
 // ── 评估 ──
 async function llmEvaluate(config, jobInfo) {
   const id = config.identity || {};
@@ -336,6 +465,21 @@ const REJECT_KEYWORDS = [
   "与岗位要求有差距", "经验方面有些差距",
   "不太满足岗位", "达不到要求",
 ];
+// ── 接受简历检测（跳过自动回复）──
+const ACCEPT_RESUME_KEYWORDS = [
+  "已接受您的简历", "接受了你的简历", "接受了您的简历",
+  "简历已接受", "已查看简历", "已接收简历",
+  "已接受简历", "接受简历",
+];
+function detectAcceptResume(messages) {
+  for (const msg of messages) {
+    for (const kw of ACCEPT_RESUME_KEYWORDS) {
+      if (msg.includes(kw)) return { found: true, keyword: kw, message: msg };
+    }
+  }
+  return { found: false };
+}
+
 function detectRejectKw(messages) {
   for (const msg of messages) {
     for (const kw of REJECT_KEYWORDS) {
@@ -385,7 +529,7 @@ async function notifyOpenClaw(config, event, data) {
 // ── 消息路由 ──
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   const handlers = {
-    health: () => getConfig().then(c => ({ status: "ok", configured: !!c.llm?.api_key })),
+    health: () => getConfig().then(c => ({ status: "ok", configured: true, hasLlm: !!c.llm?.api_key })),
     evaluate: () => handleEvaluate(msg.data),
     detectInterview: () => handleDetectInterview(msg.data),
     notifySent: () => handleNotifySent(msg.data),
@@ -443,9 +587,27 @@ async function handleEvaluate(data) {
     return r;
   }
 
-  // LLM 甄别
+  // 对方接受简历 → 跳过自动回复，仅记录
+  const accept = detectAcceptResume(messages);
+  if (accept.found) {
+    const r = {
+      type: "ACCEPTED", chatId, company, position,
+      jobTitle: data.jobTitle || "", salary, city: data.city || "",
+      keyword: accept.keyword, message: accept.message.substring(0, 200),
+      score: 60, reason: `对方接受简历`, action: "IGNORE",
+      greeting: null,
+      debug: data.debug || false, completed: true, timestamp: ts(),
+    };
+    await saveToProcessed(chatId, r);
+    console.log(`[Boss助手] ACCEPTED(跳过自动回复): ${company} | ${accept.keyword}`);
+    return r;
+  }
+
+  // 岗位评分：有 API Key → LLM，无 → 规则引擎
   const jobInfo = { company, position, title: data.jobTitle || "", salary, city: data.city || "", message: messages.slice(-5).join("\n") };
-  const ev = await llmEvaluate(config, jobInfo);
+  const ev = config.llm?.api_key
+    ? await llmEvaluate(config, jobInfo)
+    : ruleBasedEvaluate(config, jobInfo);
   const { score = 0, reason = "", action = "IGNORE", detail = "" } = ev;
 
   let greeting = null;
@@ -467,7 +629,20 @@ async function handleEvaluate(data) {
 
 async function handleDetectInterview(data) {
   const config = await getConfig();
-  const text = (data.messages || []).slice(-10).join("\n");
+  const messages = (data.messages || []).slice(-10);
+  const text = messages.join("\n");
+
+  // 无 LLM 时仅用关键词检测
+  if (!config.llm?.api_key) {
+    const kws = config.actions?.interview_keywords || DEFAULT_CONFIG.actions.interview_keywords;
+    const inv = detectInterviewKw(messages, kws);
+    if (inv.found) {
+      console.log(`[Boss助手] 面试邀请(规则): ${data.company} | ${inv.keyword}`);
+      return { is_interview: true, summary: `关键词匹配: ${inv.keyword}` };
+    }
+    return { is_interview: false, summary: "" };
+  }
+
   const r = await llmDetectInterview(config, text);
   if (r.is_interview) console.log(`[Boss助手] 面试邀请: ${data.company} | ${r.summary}`);
   return r;

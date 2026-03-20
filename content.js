@@ -23,6 +23,13 @@ let scanRound = 0;
 let scanProgress = { current: 0, total: 0, evaluated: 0, skipped: 0, replied: 0 };
 let nextScanAt = 0; // timestamp of next scan
 
+// 系统/流程性消息关键词 — 不触发礼貌回复
+const SKIP_FOLLOWUP_KEYWORDS = [
+  "已接受您的简历", "接受了你的简历", "接受了您的简历",
+  "简历已接受", "已接收简历", "已接受简历", "接受简历",
+  "附件简历已发送给对方", "已查看简历", "对方已同意",
+];
+
 let FOLLOWUP_MSG = "您好，感谢您的关注。当前消息由我的 AI 助理自动回复，您的信息已通知到我本人，我会尽快亲自与您联系，谢谢！";
 
 // ── 与 background 通信 ──
@@ -340,7 +347,11 @@ async function scanOnce() {
             if (dResult.is_interview) log(`检测到面试邀请: ${chat.company} | ${dResult.summary}`);
           } catch (e) { log(`面试检测失败: ${e.message}`); }
         }
-        if (canSendFollowup(chat.chatId)) {
+        const lastBoss = fBoss.length > 0 ? fBoss[fBoss.length - 1] : "";
+        const isSystemMsg = SKIP_FOLLOWUP_KEYWORDS.some(kw => lastBoss.includes(kw));
+        if (isSystemMsg) {
+          log(`跳过礼貌回复(系统消息): ${chat.company}`);
+        } else if (canSendFollowup(chat.chatId)) {
           const sent = await sendReply(FOLLOWUP_MSG);
           if (sent && !debugMode) markFollowupSent(chat.chatId);
           log(`已发送礼貌回复: ${chat.company}`);
@@ -450,7 +461,11 @@ async function scanOnce() {
               if (dResult.is_interview) log(`${score}分 检测到面试邀请: ${chat.company} | ${dResult.summary}`);
             } catch (e) { log(`面试检测失败: ${e.message}`); }
           }
-          if (canSendFollowup(chat.chatId)) {
+          const lastBossMsg = bossMessages.length > 0 ? bossMessages[bossMessages.length - 1] : "";
+          const isSystemMsg2 = SKIP_FOLLOWUP_KEYWORDS.some(kw => lastBossMsg.includes(kw));
+          if (isSystemMsg2) {
+            log(`${score}分 跳过礼貌回复(系统消息): ${chat.company}`);
+          } else if (canSendFollowup(chat.chatId)) {
             const sent = await sendReply(FOLLOWUP_MSG);
             if (sent && !debugMode) markFollowupSent(chat.chatId);
             log(`${score}分 已发简历+新消息，礼貌回复: ${chat.company}`);

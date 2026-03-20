@@ -51,6 +51,7 @@
 <body>
   <h3>Boss 求职助手</h3>
   <div id="status" class="status offline">检查中...</div>
+  <div id="ruleEngineHint" style="display:none;padding:4px 8px;margin:4px 0;background:#fff8e1;color:#f57f17;border-radius:4px;font-size:11px;">未配置 AI 模型，使用规则引擎评分（精度约 75%）</div>
   <div id="progressWrap" class="progress-wrap" style="display:none;">
     <div class="progress-bar"><div id="progressFill" class="progress-fill" style="width:0%"></div></div>
     <div id="progressInfo" class="progress-info"></div>
@@ -210,6 +211,7 @@
           <input type="password" id="cfgApiKey">
           <span class="toggle-eye" id="toggleKeyEye">&#128065;</span>
         </div>
+        <div class="hint" style="color:#e65100;">留空则自动降级为规则引擎评分（精度约 75%）</div>
       </div>
     </div>
 

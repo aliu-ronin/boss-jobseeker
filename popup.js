@@ -9,18 +9,14 @@ const statsEl = document.getElementById("stats");
 
 // ── 状态同步 ──
 async function syncState() {
-  let configured = false;
+  let healthResp = {};
   try {
-    const resp = await chrome.runtime.sendMessage({ action: "health" });
-    configured = resp?.configured || false;
+    healthResp = await chrome.runtime.sendMessage({ action: "health" }) || {};
   } catch {}
 
-  if (!configured) {
-    statusEl.className = "status offline";
-    statusEl.textContent = "请先配置 API Key → 点击下方「配置」";
-    toggleBtn.textContent = "开始扫描"; toggleBtn.className = "";
-    return;
-  }
+  // 更新降级提示
+  const ruleHint = document.getElementById("ruleEngineHint");
+  if (ruleHint) ruleHint.style.display = healthResp.hasLlm ? "none" : "block";
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !tab.url.includes("zhipin.com/web/geek/chat")) {
