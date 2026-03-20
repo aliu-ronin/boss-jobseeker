@@ -285,6 +285,7 @@ async function loadConfig() {
     document.getElementById("cfgScOutsource").value = sc.outsource ?? -100;
     document.getElementById("cfgSc996").value = sc.s996 ?? -20;
     document.getElementById("cfgScInfo").value = sc.info_insufficient ?? -50;
+    document.getElementById("cfgScCityMismatch").value = sc.city_mismatch ?? -20;
     document.getElementById("cfgScAiMatch").value = sc.ai_match ?? 10;
     document.getElementById("cfgScAiNo").value = sc.ai_nomatch ?? -5;
     document.getElementById("cfgScRecruiter").value = sc.recruiter_contact ?? 5;
@@ -395,6 +396,7 @@ document.getElementById("saveConfigBtn").addEventListener("click", async () => {
       outsource: parseInt(document.getElementById("cfgScOutsource").value),
       s996: parseInt(document.getElementById("cfgSc996").value),
       info_insufficient: parseInt(document.getElementById("cfgScInfo").value),
+      city_mismatch: parseInt(document.getElementById("cfgScCityMismatch").value),
       ai_match: parseInt(document.getElementById("cfgScAiMatch").value),
       ai_nomatch: parseInt(document.getElementById("cfgScAiNo").value),
       famous_company: parseInt(document.getElementById("cfgScFamous").value),

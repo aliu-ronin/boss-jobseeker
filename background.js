@@ -112,10 +112,9 @@ function buildEvalPrompt(config) {
 - 对方消息：{job_message}
 
 ## 地点计分
-- 深圳 → 地点分 = 0
-- 香港 → 地点分 = -40
-- 广东省内深圳以外（广州/东莞/佛山等）→ 地点分 = -60
-- 广东省以外 → 地点分 = -100
+- 目标城市列表：{cities}
+- 工作地点在目标城市中 → 地点分 = 0
+- 工作地点不在目标城市中 → 地点分 = {city_mismatch}
 - 地点未提及/远程 → 地点分 = 0
 
 ## ⚠️ 优先判断：对方是否已婉拒/不匹配
@@ -195,6 +194,7 @@ const DEFAULT_CONFIG = {
     outsource: -100,
     s996: -20,
     info_insufficient: -50,
+    city_mismatch: -20,
     ai_match: 10,
     ai_nomatch: -5,
     famous_company: 10,
@@ -351,13 +351,12 @@ function parseSalaryK(salaryText) {
   return (lo + hi) / 2 * months;
 }
 
-function ruleCityScore(city) {
+function ruleCityScore(city, config) {
   if (!city || city === "未知" || city.includes("远程")) return 0;
-  if (city.includes("深圳")) return 0;
-  if (city.includes("香港")) return -40;
-  const gdCities = ["广州", "东莞", "佛山", "珠海", "中山", "惠州", "江门", "肇庆", "汕头", "湛江"];
-  if (gdCities.some(c => city.includes(c))) return -60;
-  return -100; // 广东省以外
+  const targetCities = config?.filters?.cities || ["深圳", "广州", "远程"];
+  if (targetCities.some(tc => city.includes(tc))) return 0;
+  const penalty = config?.scoring?.city_mismatch ?? -20;
+  return penalty;
 }
 
 const SPAM_KEYWORDS = ["副业", "兼职", "月入", "招商加盟", "退税", "刷单", "理财", "保险代理", "微商", "传销", "个人所得税", "日结", "轻松赚"];
@@ -393,7 +392,7 @@ function ruleBasedEvaluate(config, jobInfo) {
   }
 
   // 2. 地点计分
-  const cityScore = ruleCityScore(jobInfo.city);
+  const cityScore = ruleCityScore(jobInfo.city, config);
   if (cityScore !== 0) {
     score += cityScore;
     details.push(`地点${jobInfo.city}→${cityScore}`);
@@ -472,10 +471,12 @@ function ruleBasedEvaluate(config, jobInfo) {
 async function llmEvaluate(config, jobInfo) {
   const id = config.identity || {};
   const fi = config.filters || {};
+  const sc = config.scoring || DEFAULT_CONFIG.scoring;
   const prompt = fillPrompt(buildEvalPrompt(config), {
     name: id.name || "", role: id.current_role || "", company: id.current_company || "",
     years: id.experience_years || 10, stack: (id.tech_stack || []).join(", "),
     cities: (fi.cities || []).join(", "), salary_baseline: fi.salary_baseline_k || 500,
+    city_mismatch: sc.city_mismatch ?? -20,
     blacklist: (fi.blacklist_industries || []).join(", "),
     job_company: jobInfo.company || "未知", job_position: jobInfo.position || "未知",
     job_title: jobInfo.title || "未知", job_salary: jobInfo.salary || "未知",
