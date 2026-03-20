@@ -317,6 +317,8 @@ async function llmChat(llmCfg, prompt) {
       if (content.startsWith("```")) {
         content = content.split("\n").slice(1).join("\n").replace(/```\s*$/, "").trim();
       }
+      // GLM-4.7 等推理模型会输出 <think>...</think> 思考过程，需剥离
+      content = content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
       const elapsed = Date.now() - t0;
       const parsed = JSON.parse(content);
       await L.info("LLM", `调用成功: ${elapsed}ms`, { score: parsed.score, action: parsed.action, reason: parsed.reason });
