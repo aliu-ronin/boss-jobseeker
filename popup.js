@@ -177,6 +177,77 @@ document.getElementById("statusBtn").addEventListener("click", async () => {
   } catch { statsEl.textContent = "无法获取统计"; }
 });
 
+// ── 日志面板 ──
+const logPanel = document.getElementById("logPanel");
+const logBtn = document.getElementById("logBtn");
+const logContent = document.getElementById("logContent");
+const logFilter = document.getElementById("logFilter");
+let lastLogs = [];
+
+logBtn.addEventListener("click", () => {
+  const isOpen = logPanel.style.display !== "none";
+  logPanel.style.display = isOpen ? "none" : "block";
+  logBtn.textContent = isOpen ? "日志" : "收起日志";
+  if (!isOpen) refreshLogs();
+});
+
+async function refreshLogs() {
+  try {
+    lastLogs = await chrome.runtime.sendMessage({ action: "getLogs" }) || [];
+    renderLogs();
+  } catch { logContent.textContent = "获取日志失败"; }
+}
+
+function renderLogs() {
+  const filter = logFilter.value;
+  const filtered = lastLogs.filter(log => {
+    if (filter === "all") return true;
+    if (filter === "error") return log.level === "error" || log.level === "warn";
+    return log.tag === filter;
+  });
+  if (filtered.length === 0) { logContent.textContent = "(无日志)"; return; }
+
+  const levelColor = { error: "#f44", warn: "#fa0", info: "#8f8" };
+  const lines = filtered.map(log => {
+    const c = levelColor[log.level] || "#d4d4d4";
+    const extra = log.extra ? ` ${JSON.stringify(log.extra)}` : "";
+    return `<span style="color:#888">${log.t}</span> <span style="color:${c}">${log.level.toUpperCase().padEnd(5)}</span> <span style="color:#6cf">[${log.tag}]</span> ${escHtml(log.msg)}${extra ? `\n  <span style="color:#999">${escHtml(extra)}</span>` : ""}`;
+  });
+  logContent.innerHTML = lines.join("\n");
+  logContent.scrollTop = logContent.scrollHeight;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+logFilter.addEventListener("change", renderLogs);
+
+document.getElementById("logRefreshBtn").addEventListener("click", refreshLogs);
+
+document.getElementById("logCopyBtn").addEventListener("click", () => {
+  const filter = logFilter.value;
+  const filtered = lastLogs.filter(log => {
+    if (filter === "all") return true;
+    if (filter === "error") return log.level === "error" || log.level === "warn";
+    return log.tag === filter;
+  });
+  const text = filtered.map(log => {
+    const extra = log.extra ? ` ${JSON.stringify(log.extra)}` : "";
+    return `${log.t} ${log.level.toUpperCase()} [${log.tag}] ${log.msg}${extra}`;
+  }).join("\n");
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById("logCopyBtn");
+    btn.textContent = "已复制"; setTimeout(() => { btn.textContent = "复制"; }, 1500);
+  });
+});
+
+document.getElementById("logClearBtn").addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ action: "clearLogs" });
+  lastLogs = [];
+  logContent.textContent = "(已清空)";
+});
+
 // ── 配置面板 ──
 const configPanel = document.getElementById("configPanel");
 const configBtn = document.getElementById("configBtn");

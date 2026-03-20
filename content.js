@@ -32,6 +32,77 @@ const SKIP_FOLLOWUP_KEYWORDS = [
 
 let FOLLOWUP_MSG = "您好，感谢您的关注。当前消息由我的 AI 助理自动回复，您的信息已通知到我本人，我会尽快亲自与您联系，谢谢！";
 
+// ── 风控/登录失效检测 ──
+let lastAlertType = "";    // 防止同类告警重复推送
+let lastAlertTime = 0;
+const ALERT_COOLDOWN = 300000; // 同类告警 5 分钟冷却
+
+function detectPageAnomaly() {
+  const url = location.href;
+  const body = document.body?.innerText || "";
+  const title = document.title || "";
+
+  // 1. 登录页跳转
+  if (url.includes("/web/user/login") || url.includes("/web/user/safe") || url.includes("login.zhipin.com")) {
+    return { type: "login_expired", msg: "页面跳转到登录页，登录状态已失效" };
+  }
+
+  // 2. 验证码/安全验证弹窗
+  const captchaSelectors = [
+    ".boss-verify", ".verify-wrap", ".captcha-wrap", ".slide-verify",
+    "[class*='captcha']", "[class*='verify-modal']", "[class*='risk-verify']",
+    ".geetest_panel", ".nc-container", "#nc_1_wrapper",
+  ];
+  for (const sel of captchaSelectors) {
+    const el = document.querySelector(sel);
+    if (el && el.offsetParent !== null) {
+      return { type: "captcha", msg: `检测到验证码弹窗: ${sel}` };
+    }
+  }
+
+  // 3. 页面文案异常
+  if (body.includes("操作过于频繁") || body.includes("请求频率过高")) {
+    return { type: "rate_limit", msg: "页面提示操作过于频繁（频率限制）" };
+  }
+  if (body.includes("账号存在风险") || body.includes("安全验证") || body.includes("账号异常")) {
+    return { type: "risk_control", msg: "页面提示账号存在风险/安全验证" };
+  }
+  if (body.includes("登录已过期") || body.includes("请重新登录") || body.includes("身份验证已失效")) {
+    return { type: "login_expired", msg: "页面提示登录已过期" };
+  }
+
+  // 4. 会话列表完全消失（可能页面被重置）
+  if (url.includes("/web/geek/chat")) {
+    const chatEls = document.querySelectorAll('li[role="listitem"]');
+    const chatContainer = document.querySelector(".chat-list, .message-list, [class*='chat-record']");
+    if (!chatContainer && chatEls.length === 0) {
+      // 页面可能还在加载，用 title 辅助判断
+      if (title.includes("登录") || title.includes("安全")) {
+        return { type: "login_expired", msg: "聊天页面内容为空且标题异常" };
+      }
+    }
+  }
+
+  return null; // 正常
+}
+
+async function handleAnomaly(anomaly) {
+  const now = Date.now();
+  if (anomaly.type === lastAlertType && now - lastAlertTime < ALERT_COOLDOWN) {
+    log(`告警冷却中(${anomaly.type})，跳过推送`);
+    return;
+  }
+  lastAlertType = anomaly.type;
+  lastAlertTime = now;
+
+  log(`!!!异常检测: [${anomaly.type}] ${anomaly.msg}`);
+  try {
+    await callBg("notifyAlert", { type: anomaly.type, msg: anomaly.msg, url: location.href });
+  } catch (e) {
+    log(`告警推送失败: ${e.message}`);
+  }
+}
+
 // ── 与 background 通信 ──
 async function callBg(action, data) {
   return chrome.runtime.sendMessage({ action, data });
@@ -285,6 +356,18 @@ async function scanOnce() {
     return;
   }
 
+  // ── 风控/登录检测 ──
+  const anomaly = detectPageAnomaly();
+  if (anomaly) {
+    await handleAnomaly(anomaly);
+    statusText = `异常: ${anomaly.msg}`;
+    enabled = false;
+    if (scanIntervalId) { clearInterval(scanIntervalId); scanIntervalId = null; }
+    log(`检测到异常，已自动暂停扫描: ${anomaly.msg}`);
+    running = false;
+    return;
+  }
+
   try {
     statusText = `第${scanRound}轮 | 扫描会话列表...`;
     const chatList = extractChatList();
@@ -514,7 +597,20 @@ async function scanOnce() {
       } else if (!debugMode) { processedIds.add(chat.chatId); }
       await sleep(3000);
     }
-  } catch (e) { log(`扫描异常: ${e.message}`); }
+  } catch (e) {
+    log(`扫描异常: ${e.message}`);
+    // 扫描过程中出异常，也检查一下是否触发风控
+    const midAnomaly = detectPageAnomaly();
+    if (midAnomaly) {
+      await handleAnomaly(midAnomaly);
+      statusText = `异常: ${midAnomaly.msg}`;
+      enabled = false;
+      if (scanIntervalId) { clearInterval(scanIntervalId); scanIntervalId = null; }
+      log(`扫描中触发异常，已自动暂停: ${midAnomaly.msg}`);
+      running = false;
+      return;
+    }
+  }
 
   if (firstRun) firstRun = false;
   nextScanAt = Date.now() + SCAN_INTERVAL;
@@ -639,6 +735,18 @@ window.__debugReply = async function (text) {
   log(`[调试] 测试发送消息: ${text}`);
   const ok = await sendReply(text);
   log(`[调试] 发消息结果: ${ok}`);
+};
+window.__debugLogs = async function (filter) {
+  const logs = await callBg("getLogs") || [];
+  if (logs.length === 0) { log("[调试] 日志为空"); return; }
+  const filtered = filter ? logs.filter(l => l.tag === filter || l.level === filter) : logs;
+  console.group(`[Boss助手] 日志 (${filtered.length}/${logs.length} 条${filter ? `, 筛选: ${filter}` : ""})`);
+  for (const l of filtered) {
+    const fn = l.level === "error" ? console.error : l.level === "warn" ? console.warn : console.log;
+    fn(`${l.t} [${l.tag}] ${l.msg}`, l.extra || "");
+  }
+  console.groupEnd();
+  log(`提示: __debugLogs() 全部 | __debugLogs("LLM") 仅LLM | __debugLogs("error") 仅错误`);
 };
 window.__debugFullFlow = async function () {
   log("[调试] 提取当前会话消息...");

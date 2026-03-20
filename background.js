@@ -5,6 +5,31 @@
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function ts() { return new Date().toLocaleString("zh-CN", { hour12: false }); }
+
+// ── 本地日志系统 ──
+const LOG_MAX = 200;
+const LOG_KEY = "_logs";
+async function _getLogs() {
+  const { [LOG_KEY]: logs } = await chrome.storage.local.get(LOG_KEY);
+  return Array.isArray(logs) ? logs : [];
+}
+async function appendLog(level, tag, message, extra) {
+  const logs = await _getLogs();
+  logs.push({ t: ts(), level, tag, msg: message, ...(extra ? { extra } : {}) });
+  if (logs.length > LOG_MAX) logs.splice(0, logs.length - LOG_MAX);
+  await chrome.storage.local.set({ [LOG_KEY]: logs });
+  // 同时输出到 console
+  const prefix = `[Boss助手][${tag}]`;
+  if (level === "error") console.error(prefix, message, extra || "");
+  else if (level === "warn") console.warn(prefix, message, extra || "");
+  else console.log(prefix, message, extra || "");
+}
+const L = {
+  info: (tag, msg, extra) => appendLog("info", tag, msg, extra),
+  warn: (tag, msg, extra) => appendLog("warn", tag, msg, extra),
+  error: (tag, msg, extra) => appendLog("error", tag, msg, extra),
+};
+
 function fillPrompt(tpl, params) {
   for (const [key, val] of Object.entries(params)) {
     tpl = tpl.replaceAll(`{${key}}`, String(val));
@@ -236,20 +261,25 @@ async function llmChat(llmCfg, prompt) {
   const apiKey = llmCfg.api_key || "";
   const model = llmCfg.model || "GLM-4.7";
   const fmt = LLM_PROVIDERS[provider]?.format || "openai";
+  const LLM_TIMEOUT = 30000; // 30 秒超时
 
-  if (!apiKey) { console.error("[Boss助手] 未配置 API Key"); return null; }
+  if (!apiKey) { await L.error("LLM", "未配置 API Key"); return null; }
 
+  await L.info("LLM", `调用开始: ${provider}/${model}`, { url: apiUrl.substring(0, 60) });
   for (let attempt = 0; attempt < 3; attempt++) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), LLM_TIMEOUT);
+    const t0 = Date.now();
     try {
       let content;
 
       if (fmt === "claude") {
         const resp = await fetch(apiUrl, {
-          method: "POST",
+          method: "POST", signal: ac.signal,
           headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "Content-Type": "application/json" },
           body: JSON.stringify({ model, max_tokens: 4096, messages: [{ role: "user", content: prompt }], temperature: 0.1 }),
         });
-        if (resp.status === 429) { await sleep((attempt + 1) * 5000); continue; }
+        if (resp.status === 429) { clearTimeout(timer); await L.warn("LLM", `429 限流, 第${attempt + 1}次, 等待重试`); await sleep((attempt + 1) * 5000); continue; }
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const rj = await resp.json();
         const blocks = rj.content || [];
@@ -259,22 +289,22 @@ async function llmChat(llmCfg, prompt) {
       } else if (fmt === "gemini") {
         const url = apiUrl.replace("{model}", model) + `?key=${apiKey}`;
         const resp = await fetch(url, {
-          method: "POST",
+          method: "POST", signal: ac.signal,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1 } }),
         });
-        if (resp.status === 429) { await sleep((attempt + 1) * 5000); continue; }
+        if (resp.status === 429) { clearTimeout(timer); await L.warn("LLM", `429 限流, 第${attempt + 1}次, 等待重试`); await sleep((attempt + 1) * 5000); continue; }
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const rj = await resp.json();
         content = rj.candidates[0].content.parts[0].text.trim();
 
       } else {
         const resp = await fetch(apiUrl, {
-          method: "POST",
+          method: "POST", signal: ac.signal,
           headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], temperature: 0.1 }),
         });
-        if (resp.status === 429) { await sleep((attempt + 1) * 5000); continue; }
+        if (resp.status === 429) { clearTimeout(timer); await L.warn("LLM", `429 限流, 第${attempt + 1}次, 等待重试`); await sleep((attempt + 1) * 5000); continue; }
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const rj = await resp.json();
         if (!rj.choices) {
@@ -286,14 +316,26 @@ async function llmChat(llmCfg, prompt) {
       if (content.startsWith("```")) {
         content = content.split("\n").slice(1).join("\n").replace(/```\s*$/, "").trim();
       }
-      return JSON.parse(content);
+      const elapsed = Date.now() - t0;
+      const parsed = JSON.parse(content);
+      await L.info("LLM", `调用成功: ${elapsed}ms`, { score: parsed.score, action: parsed.action, reason: parsed.reason });
+      return parsed;
 
     } catch (e) {
+      const elapsed = Date.now() - t0;
+      if (e.name === "AbortError") {
+        await L.error("LLM", `超时 ${LLM_TIMEOUT}ms (${elapsed}ms), 第${attempt + 1}/3次`);
+        if (attempt < 2) continue;
+        return null;
+      }
       if (attempt < 2 && String(e).includes("429")) { await sleep((attempt + 1) * 5000); continue; }
-      console.error(`[Boss助手] LLM 异常 (${provider}/${model}):`, e);
+      await L.error("LLM", `异常 (${elapsed}ms): ${e.message}`, { provider, model, attempt: attempt + 1 });
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
+  await L.error("LLM", "3次重试全部失败");
   return null;
 }
 
@@ -501,6 +543,7 @@ async function notifyOpenClaw(config, event, data) {
   if (event === "reply" && !oc.notify_reply) return;
   if (event === "interview" && !oc.notify_interview) return;
   if (event === "summary" && !oc.notify_summary) return;
+  // alert 事件始终推送，不受开关控制
 
   let text = "";
   if (event === "reply") {
@@ -509,6 +552,10 @@ async function notifyOpenClaw(config, event, data) {
     text = `[Boss助手] 检测到面试邀请\n公司: ${data.company}\n岗位: ${data.jobTitle || data.position}\n关键词: ${data.keyword}\n内容: ${(data.message || "").substring(0, 100)}`;
   } else if (event === "summary") {
     text = `[Boss助手] 第${data.round}轮扫描完成\n评估: ${data.evaluated} | 投递: ${data.replied} | 跳过: ${data.skipped}\n累计已处理: ${data.total}`;
+  } else if (event === "alert") {
+    const labels = { login_expired: "登录失效", captcha: "验证码风控", rate_limit: "频率限制", risk_control: "账号风控" };
+    const label = labels[data.type] || data.type;
+    text = `🚨 [Boss助手] 紧急告警: ${label}\n${data.msg}\n扫描已自动暂停，请尽快处理！\n页面: ${(data.url || "").substring(0, 80)}`;
   }
   if (!text) return;
 
@@ -539,6 +586,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     getStats: () => handleGetStats(),
     clearProcessed: () => handleClearProcessed(),
     notifyRoundSummary: () => handleNotifyRoundSummary(msg.data),
+    getLogs: () => _getLogs(),
+    clearLogs: () => chrome.storage.local.set({ [LOG_KEY]: [] }).then(() => ({ ok: true })),
+    notifyAlert: () => handleNotifyAlert(msg.data),
   };
   const handler = handlers[msg.action];
   if (handler) { handler().then(sendResponse); return true; }
@@ -553,6 +603,8 @@ async function handleEvaluate(data) {
   const threshold = actionsCfg.auto_reply_threshold || 70;
   const greetTpl = actionsCfg.greeting_template || DEFAULT_CONFIG.actions.greeting_template;
   const ident = config.identity || {};
+
+  await L.info("评估", `开始: ${company} | ${data.jobTitle || position} | ${salary || "薪资未知"}`);
 
   // 关键词面试检测 → 直接标记，不发招呼/简历
   const inv = detectInterviewKw(messages, kws);
@@ -605,10 +657,15 @@ async function handleEvaluate(data) {
 
   // 岗位评分：有 API Key → LLM，无 → 规则引擎
   const jobInfo = { company, position, title: data.jobTitle || "", salary, city: data.city || "", message: messages.slice(-5).join("\n") };
-  const ev = config.llm?.api_key
-    ? await llmEvaluate(config, jobInfo)
-    : ruleBasedEvaluate(config, jobInfo);
+  const useRuleEngine = !config.llm?.api_key;
+  await L.info("评估", `引擎: ${useRuleEngine ? "规则" : "LLM"} | ${company}`);
+  const evalT0 = Date.now();
+  const ev = useRuleEngine
+    ? ruleBasedEvaluate(config, jobInfo)
+    : await llmEvaluate(config, jobInfo);
+  const evalElapsed = Date.now() - evalT0;
   const { score = 0, reason = "", action = "IGNORE", detail = "" } = ev;
+  await L.info("评估", `结果: ${score}分 ${action} (${evalElapsed}ms) | ${company}`, { reason, detail: (detail || "").substring(0, 100) });
 
   let greeting = null;
   if (action === "REPLY" && score >= threshold) {
@@ -744,6 +801,33 @@ async function handleGetStats() {
   const recent_all = entries.sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || "")).slice(0, 20);
   console.log(`[Boss助手] getStats: 共 ${keys.length} 条, keys样例: ${keys.slice(0, 5).join(", ")}`);
   return { total: keys.length, stats, recent_all };
+}
+
+async function handleNotifyAlert(data) {
+  const config = await getConfig();
+  await L.error("告警", `${data.type}: ${data.msg}`, { url: (data.url || "").substring(0, 80) });
+  // alert 始终推送，即使 OpenClaw 总开关关闭也尝试发送
+  const oc = config.openclaw;
+  if (oc?.token) {
+    const labels = { login_expired: "登录失效", captcha: "验证码风控", rate_limit: "频率限制", risk_control: "账号风控" };
+    const label = labels[data.type] || data.type;
+    const text = `🚨 [Boss助手] 紧急告警: ${label}\n${data.msg}\n扫描已自动暂停，请尽快处理！\n页面: ${(data.url || "").substring(0, 80)}`;
+    const url = (oc.gateway_url || "http://127.0.0.1:18789").replace(/\/+$/, "");
+    try {
+      const resp = await fetch(`${url}/v1/notify`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${oc.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ text, source: "boss-jobseeker", event: "alert", priority: "urgent" }),
+      });
+      if (!resp.ok) await L.warn("告警", `OpenClaw 推送响应: ${resp.status}`);
+      else await L.info("告警", "已通过 OpenClaw 推送紧急告警");
+    } catch (e) {
+      await L.error("告警", `OpenClaw 推送失败: ${e.message}`);
+    }
+  } else {
+    await L.warn("告警", "未配置 OpenClaw Token，无法推送告警（仅记录日志）");
+  }
+  return { ok: true };
 }
 
 async function handleNotifyRoundSummary(data) {

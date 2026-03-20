@@ -62,7 +62,28 @@
   <button id="debugBtn" class="secondary">调试模式：关</button>
   <button id="statusBtn" class="secondary">查看统计</button>
   <button id="clearCacheBtn" class="secondary">清除缓存</button>
+  <button id="logBtn" class="secondary">日志</button>
   <button id="configBtn" class="secondary">配置</button>
+
+  <div id="logPanel" style="display:none;margin-top:10px;border-top:1px solid #eee;padding-top:10px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+      <span style="font-size:12px;font-weight:bold;">运行日志（最近200条）</span>
+      <div style="display:flex;gap:4px;">
+        <button id="logRefreshBtn" style="width:auto;padding:3px 8px;font-size:11px;margin:0;">刷新</button>
+        <button id="logCopyBtn" style="width:auto;padding:3px 8px;font-size:11px;margin:0;" class="secondary">复制</button>
+        <button id="logClearBtn" style="width:auto;padding:3px 8px;font-size:11px;margin:0;" class="danger">清空</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:4px;margin-bottom:6px;">
+      <select id="logFilter" style="font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:3px;">
+        <option value="all">全部</option>
+        <option value="LLM">LLM</option>
+        <option value="评估">评估</option>
+        <option value="error">错误</option>
+      </select>
+    </div>
+    <div id="logContent" style="max-height:400px;overflow-y:auto;font-family:monospace;font-size:11px;background:#1e1e1e;color:#d4d4d4;padding:8px;border-radius:6px;line-height:1.6;white-space:pre-wrap;word-break:break-all;"></div>
+  </div>
 
   <div id="configPanel" class="config-panel">
 
