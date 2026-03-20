@@ -655,14 +655,21 @@ async function handleEvaluate(data) {
     return r;
   }
 
-  // 岗位评分：有 API Key → LLM，无 → 规则引擎
+  // 岗位评分：有 API Key → LLM（失败自动降级），无 → 规则引擎
   const jobInfo = { company, position, title: data.jobTitle || "", salary, city: data.city || "", message: messages.slice(-5).join("\n") };
-  const useRuleEngine = !config.llm?.api_key;
-  await L.info("评估", `引擎: ${useRuleEngine ? "规则" : "LLM"} | ${company}`);
+  const hasLlm = !!config.llm?.api_key;
+  await L.info("评估", `引擎: ${hasLlm ? "LLM" : "规则"} | ${company}`);
   const evalT0 = Date.now();
-  const ev = useRuleEngine
-    ? ruleBasedEvaluate(config, jobInfo)
-    : await llmEvaluate(config, jobInfo);
+  let ev;
+  if (hasLlm) {
+    ev = await llmEvaluate(config, jobInfo);
+    if (!ev || ev.score === undefined) {
+      await L.warn("评估", `LLM 失败，降级规则引擎 | ${company}`);
+      ev = ruleBasedEvaluate(config, jobInfo);
+    }
+  } else {
+    ev = ruleBasedEvaluate(config, jobInfo);
+  }
   const evalElapsed = Date.now() - evalT0;
   const { score = 0, reason = "", action = "IGNORE", detail = "" } = ev;
   await L.info("评估", `结果: ${score}分 ${action} (${evalElapsed}ms) | ${company}`, { reason, detail: (detail || "").substring(0, 100) });
@@ -700,7 +707,15 @@ async function handleDetectInterview(data) {
     return { is_interview: false, summary: "" };
   }
 
-  const r = await llmDetectInterview(config, text);
+  let r = await llmDetectInterview(config, text);
+  if (!r || r.is_interview === undefined) {
+    // LLM 失败，降级关键词检测
+    const kws = config.actions?.interview_keywords || DEFAULT_CONFIG.actions.interview_keywords;
+    const inv = detectInterviewKw(messages, kws);
+    r = inv.found
+      ? { is_interview: true, summary: `关键词匹配: ${inv.keyword}` }
+      : { is_interview: false, summary: "" };
+  }
   if (r.is_interview) console.log(`[Boss助手] 面试邀请: ${data.company} | ${r.summary}`);
   return r;
 }
