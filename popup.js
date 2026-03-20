@@ -373,3 +373,36 @@ document.getElementById("donateBtn").addEventListener("click", () => {
 
 syncState();
 setInterval(syncState, 2000);
+
+// ── 版本显示与更新检查 ──
+(async function checkVersion() {
+  const manifest = chrome.runtime.getManifest();
+  const currentVer = manifest.version;
+  const versionText = document.getElementById("versionText");
+  const updateLink = document.getElementById("updateLink");
+  versionText.textContent = `v${currentVer}`;
+
+  try {
+    const resp = await fetch("https://api.github.com/repos/aliu-ronin/boss-jobseeker/releases/latest", { cache: "no-cache" });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const latestVer = (data.tag_name || "").replace(/^v/, "");
+    if (latestVer && latestVer !== currentVer && compareVersions(latestVer, currentVer) > 0) {
+      updateLink.textContent = `新版本 v${latestVer} 可用`;
+      updateLink.href = data.html_url;
+      updateLink.target = "_blank";
+      updateLink.style.display = "inline";
+    }
+  } catch {}
+})();
+
+function compareVersions(a, b) {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] || 0, nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
